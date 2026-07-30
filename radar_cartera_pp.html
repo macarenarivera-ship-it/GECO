@@ -398,6 +398,7 @@ tr.sep:hover td{background:#e4f5ea}
     <div class="tb">
       <input type="search" id="qc" placeholder="Buscar empresa o pagador...">
       <select id="fec"><option value="">Todos los ejecutivos</option></select>
+      <span id="jb-status" style="font-size:0.78rem;color:#9aa0b0;font-style:italic"></span>
       <select id="fepc"><option value="">Todos los estados PP</option><option value="Cliente">Cliente</option><option value="Fugado">Fugado</option><option value="Prospecto">Prospecto</option></select>
       <select id="fnc"><option value="">Todos los estados</option><option value="activa">Al día</option><option value="bajo">30–59 días</option><option value="medio">60–89 días</option><option value="alto">90+ días</option></select>
       <button class="btn" id="expc">Exportar CSV</button>
@@ -478,14 +479,75 @@ const GEST = ["Ya no trabaja con el pagador","Fue excepcional","Perdido por tasa
 // Opciones de gestión exclusivas del módulo Cartera de clientes (lista plana, mismo diseño que Lista accionable)
 const GEST_CART = ["Cursado","En Gestión","Ya no trabaja con el pagador","Fue excepcional","Perdido por tasa","Perdido por liquidez","Perdido por Rapidez","Pagador Deshabilitado"];
 const GK="radar_pp_gest_v1";
-// Gestiones grabadas dentro del archivo (a prueba de cambios por chat). Clave = HubSpot ID.
 const GEST_FIJAS = {};
-let G={};try{G=JSON.parse(localStorage.getItem(GK))||{}}catch(e){}
-// Migrar formato antiguo (string → objeto)
-for(const k in G){if(typeof G[k]==='string')G[k]={gest:G[k]};}
-// Las gestiones fijas del archivo se incorporan si no existen ya en el navegador
+
+// ── JSONBin config ──
+const JB_KEY  = '$2a$10$gYIHd2Bs9qNbRWB2/GeCJOAB/gYia.Nc1JZi0Dg8gdVZJ6kOexCKG';
+const JB_BINS = {
+  '1448104430':'6a6bdbf0f5f4af5e29d7e059', // Luis Gonzalez
+  '343593960' :'6a6bdbf0f5f4af5e29d7e059', // Luis Gonzalez (alt ID)
+  '81633773'  :'6a6bdbf1da38895dfea66d60', // Sofia Rex
+  '82186002'  :'6a6bdbf1da38895dfea66d61', // Kevin Galaz
+  '90906274'  :'6a6bdbf2da38895dfea66d62', // Cesar Angel
+  '92609743'  :'6a6bdbf2f5f4af5e29d7e05b', // Valentin Monroy
+  '273244548' :'6a6bdbf2f5f4af5e29d7e05c'  // Macarena Rivera
+};
+
+// ejecutivo seleccionado (se setea al elegir en el filtro o al cargar la página)
+let _execId = null;
+let _binId  = null;
+let _saveTimer = null;
+
+// G siempre en memoria; se sincroniza con JSONBin al cambiar de ejecutivo y al guardar
+let G = {};
+
+// Migración formato antiguo localStorage → objeto
+(function(){try{const old=JSON.parse(localStorage.getItem(GK)||'{}');for(const k in old){if(typeof old[k]==='string')old[k]={gest:old[k]};}if(Object.keys(old).length)G=old;}catch(e){}})();
 for(const k in GEST_FIJAS){if(!(k in G))G[k]={gest:GEST_FIJAS[k]};}
-function sg(){try{localStorage.setItem(GK,JSON.stringify(G))}catch(e){}}
+
+// ── JSONBin helpers ──
+async function jbLoad(binId){
+  try{
+    const r=await fetch('https://api.jsonbin.io/v3/b/'+binId+'/latest',{headers:{'X-Master-Key':JB_KEY,'X-Bin-Meta':'false'}});
+    if(!r.ok)return null;
+    const d=await r.json();
+    return d.g||null;
+  }catch(e){return null;}
+}
+async function jbSave(binId,data){
+  try{
+    await fetch('https://api.jsonbin.io/v3/b/'+binId,{
+      method:'PUT',
+      headers:{'Content-Type':'application/json','X-Master-Key':JB_KEY},
+      body:JSON.stringify({g:data})
+    });
+  }catch(e){}
+}
+
+// cargar gestiones del ejecutivo seleccionado
+async function loadExecGest(execId){
+  _execId=execId;
+  _binId=JB_BINS[execId]||null;
+  if(_binId){
+    const remote=await jbLoad(_binId);
+    if(remote){G=remote;for(const k in G){if(typeof G[k]==='string')G[k]={gest:G[k]};}}
+  }
+  try{localStorage.setItem(GK,JSON.stringify(G));}catch(e){}
+}
+
+// guardar con debounce 800ms para no saturar la API
+function sg(){
+  try{localStorage.setItem(GK,JSON.stringify(G));}catch(e){}
+  if(!_binId)return;
+  clearTimeout(_saveTimer);
+  _saveTimer=setTimeout(async()=>{
+    const ind=document.getElementById('jb-status');
+    if(ind)ind.textContent='Guardando…';
+    await jbSave(_binId,G);
+    if(ind){ind.textContent='✓ Guardado en la nube';setTimeout(()=>{if(ind)ind.textContent='';},2000);}
+  },800);
+}
+
 function gGet(id){const v=G[id];if(!v)return{gest:'',monto:'',pag:'',fecha:''};return{gest:v.gest||'',monto:v.monto||'',pag:v.pag||'',fecha:v.fecha||''};}
 function gSet(id,field,val){if(!G[id])G[id]={};G[id][field]=(val===''||val===null||val===undefined)?undefined:val;if(!G[id].gest&&!G[id].monto&&!G[id].pag&&!G[id].fecha)delete G[id];sg();}
 function dias(f){return Math.floor((HOY-new Date(f+'T12:00:00'))/86400000)}
@@ -896,7 +958,19 @@ function rendc(){let f=CART.slice();const qq=qc.value.trim().toLowerCase();
   tbc.querySelectorAll('.pag-sel').forEach(sel=>sel.onchange=()=>{gSet(sel.dataset.id,'pag',sel.value);});
   tbc.querySelectorAll('.fecha-inp').forEach(inp=>inp.onchange=()=>{gSet(inp.dataset.id,'fecha',inp.value);});
   cvAttachCollapse(tbc,'tbc');}
-qc.oninput=rendc;fec.onchange=rendc;fepc.onchange=rendc;fnc.onchange=rendc;
+qc.oninput=rendc;
+fec.onchange=async function(){
+  if(fec.value){
+    const ind=document.getElementById('jb-status');
+    if(ind)ind.textContent='Cargando gestiones…';
+    await loadExecGest(fec.value);
+    if(ind)ind.textContent='';
+  } else {
+    _execId=null;_binId=null;
+  }
+  rendc();
+};
+fepc.onchange=rendc;fnc.onchange=rendc;
 document.querySelectorAll('#tc th[data-sc]').forEach(th=>th.onclick=()=>{const k=th.dataset.sc;if(k==='monto'){skc='monto';sdc=-1}else if(skc===k)sdc*=-1;else{skc=k;sdc=(k==='n'||k==='exec'||k==='matriz'||k==='fuo'||k==='gestion')?1:-1}rendc()});
 expc.onclick=()=>{let f=CART.slice();const qq=qc.value.trim().toLowerCase();
   if(qq)f=f.filter(r=>r.n.toLowerCase().includes(qq)||(r.matriz||'').toLowerCase().includes(qq));
